@@ -39,8 +39,8 @@ def get_stock_data(tickers, is_us=False):
         except: pass
     return data_dict
 
-# 4. 포트폴리오 가공 엔진
-def process_portfolio(df, stock_data, is_us=False):
+# 4. 포트폴리오 가공 엔진 (예수금 합산 로직 추가)
+def process_portfolio(df, stock_data, is_us=False, aggregate_cash=False):
     temp = df.copy()
     if is_us:
         temp = temp.rename(columns={'Symbol': '티커', 'Remarks': '종목명', 'Qty': '보유수량', 'Price Paid': '평균단가', 'Last Price': '현재가'})
@@ -64,18 +64,30 @@ def process_portfolio(df, stock_data, is_us=False):
     temp['매수금액'] = temp['보유수량'] * temp['평균단가']
     temp['평가금액'] = temp['보유수량'] * temp['실시간현재가']
     temp['평가손익'] = temp['평가금액'] - temp['매수금액']
-    temp['수익률(%)'] = (temp['평가손익'] / temp['매수금액']).fillna(0) * 100
+    temp['수익률(%)'] = (temp['평가손익'] / temp['매수금액'] * 100).fillna(0)
     temp['전일대비'] = (temp['실시간현재가'] - temp['전일종가']) * temp['보유수량']
-    temp['전일변동(%)'] = ((temp['실시간현재가'] / temp['전일종가']) - 1).fillna(0) * 100
+    temp['전일변동(%)'] = ((temp['실시간현재가'] / temp['전일종가'] - 1) * 100).fillna(0)
     
+    # [통합 탭 전용] 예수금 합산 처리
+    if aggregate_cash and not is_us:
+        cash_mask = temp['종목명'] == '예수금'
+        if cash_mask.any():
+            stocks = temp[~cash_mask]
+            cash_total = temp.loc[cash_mask, '매수금액'].sum()
+            # 새로운 통합 예수금 행 생성
+            agg_cash = temp[cash_mask].iloc[0:1].copy()
+            if '계좌명' in agg_cash.columns: agg_cash['계좌명'] = '통합'
+            agg_cash['보유수량'], agg_cash['평균단가'], agg_cash['실시간현재가'] = 1, cash_total, cash_total
+            agg_cash['매수금액'], agg_cash['평가금액'] = cash_total, cash_total
+            agg_cash['평가손익'], agg_cash['수익률(%)'], agg_cash['전일대비'], agg_cash['전일변동(%)'] = 0, 0, 0, 0
+            temp = pd.concat([stocks, agg_cash], ignore_index=True)
+
     clean_df = temp.copy()
     
-    # 합계 계산
     t_buy, t_eval = temp['매수금액'].sum(), temp['평가금액'].sum()
     t_day = temp['전일대비'].sum()
     t_profit = t_eval - t_buy
     t_ratio = (t_profit / t_buy * 100) if t_buy != 0 else 0
-    # [수정된 부분] else 0 문구를 확실히 추가했습니다.
     t_day_ratio = (t_day / (t_eval - t_day) * 100) if (t_eval - t_day) != 0 else 0
 
     summary_data = {'종목명': 'TOTAL', '보유수량': 0, '평균단가': 0, '매수금액': t_buy, '실시간현재가': 0, '평가금액': t_eval, '평가손익': t_profit, '수익률(%)': t_ratio, '전일대비': t_day, '전일변동(%)': t_day_ratio}
@@ -94,7 +106,7 @@ def color_profit(val):
     return ''
 
 # UI 구성
-st.title("🌎 태호님의 글로벌 투자 실시간 대시보드")
+st.title("🚀 태호님의 글로벌 투자 OS (1분 업데이트)")
 tab_kr, tab_us = st.tabs(["🇰🇷 한국 포트폴리오", "🇺🇸 미국 포트폴리오"])
 
 with tab_kr:
@@ -103,16 +115,16 @@ with tab_kr:
     kr_format = {'보유수량':'{:,.0f}', '평균단가':'{:,.0f}', '매수금액':'{:,.0f}', '실시간현재가':'{:,.0f}', '평가금액':'{:,.0f}', '평가손익':'{:,.0f}', '수익률(%)':'{:.2f}%', '전일대비':'{:,.0f}', '전일변동(%)':'{:.2f}%'}
     sub_total, sub1, sub2, sub3 = st.tabs(["통합", "하나(전략)", "하나(일반)", "키움"])
     
-    def display_kr_tab(target_df, data):
+    def display_kr_tab(target_df, data, aggregate=False):
         col1, col2 = st.columns([2.5, 1])
-        res, clean = process_portfolio(target_df, data)
+        res, clean = process_portfolio(target_df, data, aggregate_cash=aggregate)
         with col1:
             st.dataframe(res.style.format(kr_format).map(color_profit, subset=['평가손익', '수익률(%)', '전일대비', '전일변동(%)']), use_container_width=True)
         with col2:
             fig = px.pie(clean, values='평가금액', names='섹터', hole=0.4)
             st.plotly_chart(fig, use_container_width=True)
 
-    with sub_total: display_kr_tab(df_kr_raw, kr_data)
+    with sub_total: display_kr_tab(df_kr_raw, kr_data, aggregate=True)
     with sub1: display_kr_tab(df_kr_raw[df_kr_raw['계좌명'].str.contains("38011760")], kr_data)
     with sub2: display_kr_tab(df_kr_raw[df_kr_raw['계좌명'].str.contains("38083150")], kr_data)
     with sub3: display_kr_tab(df_kr_raw[df_kr_raw['계좌명'].str.contains("5851")], kr_data)
@@ -124,9 +136,7 @@ with tab_us:
     col1, col2 = st.columns([2.5, 1])
     res_us, clean_us = process_portfolio(df_us_raw, us_data, is_us=True)
     with col1:
-        st.subheader("미국 주식 현황")
         st.dataframe(res_us.style.format(us_format).map(color_profit, subset=['평가손익', '수익률(%)', '전일대비', '전일변동(%)']), use_container_width=True)
     with col2:
-        st.subheader("섹터별 비중")
         fig_us = px.pie(clean_us, values='평가금액', names='섹터', hole=0.4)
         st.plotly_chart(fig_us, use_container_width=True)
