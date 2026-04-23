@@ -23,7 +23,7 @@ def get_stock_data(tickers, is_us=False):
         "HD현대일렉트릭": "267260.KS", "SK하이닉스": "000660.KS", "DL이앤씨": "375500.KS",
         "롯데정밀화학": "004000.KS", "LG전자": "066570.KS", "NAVER": "035420.KS",
         "카카오": "035720.KS", "두산에너빌리티": "034020.KS", "현대차2우B": "005387.KS",
-        "한국전력": "015760.KS", "TIGER반도체TOP10": "396500.KS"
+        "한국전력": "015760.KS", "TIGER반도체TOP10": "396500.KS", "HANARO Fn K-반도체": "395270.KS"
     }
     data_dict = {}
     for t in tickers:
