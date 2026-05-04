@@ -18,11 +18,12 @@ def load_data(sheet_id):
 
 # 3. 실시간 가격 및 전일 종가 가져오기
 def get_stock_data(tickers, is_us=False):
-    # [수정 포인트] 오타와 특수 따옴표를 모두 제거하고 신규 종목을 추가했습니다.
+    # 한국 종목 맵 (코스피 .KS / 코스닥 .KQ 구분)
     ticker_map = {
         "삼성전자": "005930.KS", "LS": "006260.KS", "LS ELECTRIC": "010120.KS", 
         "HD현대일렉트릭": "267260.KS", "SK하이닉스": "000660.KS", "DL이앤씨": "375500.KS", 
-        "리노공업": "058470.KS", "LG전자": "066570.KS", "NAVER": "035420.KS", 
+        "리노공업": "058470.KQ",  # <--- .KQ로 수정 (코스닥 종목)
+        "LG전자": "066570.KS", "NAVER": "035420.KS", 
         "카카오": "035720.KS", "두산에너빌리티": "034020.KS", "현대차2우B": "005387.KS", 
         "한국전력": "015760.KS", "TIGER반도체TOP10": "396500.KS", "HANARO Fn K-반도체": "395270.KS"
     }
@@ -30,9 +31,17 @@ def get_stock_data(tickers, is_us=False):
     for t in tickers:
         if t in ['예수금', 'Cash', 'TOTAL', '합계']: continue
         try:
-            symbol = t if is_us else ticker_map.get(t, f"{t}.KS")
+            # 1. 미국 주식이면 티커 그대로 사용
+            if is_us:
+                symbol = t
+            # 2. 한국 주식이면 맵에서 먼저 찾고, 없으면 기본 .KS 적용
+            else:
+                symbol = ticker_map.get(t, f"{t}.KS")
+            
             ticker_obj = yf.Ticker(symbol)
-            hist = ticker_obj.history(period="2d")
+            # 데이터를 가져오지 못할 경우를 대비해 5일치 데이터를 요청하여 안정성 확보
+            hist = ticker_obj.history(period="5d") 
+            
             if len(hist) >= 2:
                 data_dict[t] = {'current': hist['Close'].iloc[-1], 'prev_close': hist['Close'].iloc[-2]}
             elif len(hist) == 1:
