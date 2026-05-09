@@ -2,141 +2,186 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
+import os
+from datetime import datetime
 
-# 1. 페이지 설정
-st.set_page_config(page_title="태호님의 글로벌 투자 OS", layout="wide")
+# 1. 초기 설정
+st.set_page_config(page_title="Taeho's Investment OS v4.1", layout="wide")
+st.title("🌎 태호님의 글로벌 투자 OS v4.1")
 
-# 2. 구글 스프레드시트 ID
-KR_SHEET_ID = "1tBxMnO3g8JpWA0zV2tIO96veEP2KeR6kfd9H1OnPXK4"
-US_SHEET_ID = "1OfV4YUnc-gvQJ5ZdEZ6HU3ezK6lUp6WcHFcll-83Ibw"
+log_area = st.sidebar.empty()
+def log(msg): log_area.info(f"🛰️ {msg}")
 
+KR_ID = "1tBxMnO3g8JpWA0zV2tIO96veEP2KeR6kfd9H1OnPXK4"
+US_ID = "1OfV4YUnc-gvQJ5ZdEZ6HU3ezK6lUp6WcHFcll-83Ibw"
+HISTORY_FILE = "asset_history.csv"
+
+# 2. 데이터 시트 로드
 @st.cache_data(ttl=60)
-def load_data(sheet_id):
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-    df = pd.read_csv(url)
-    return df.dropna(subset=[df.columns[0]])
+def load_raw_sheet(sid):
+    try:
+        url = f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv"
+        df = pd.read_csv(url)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df.dropna(subset=[df.columns[0]]).reset_index(drop=True)
+    except Exception as e:
+        st.error(f"시트 로딩 실패: {e}")
+        return pd.DataFrame()
 
-# 3. 실시간 가격 및 전일 종가 가져오기
-def get_stock_data(tickers, is_us=False):
-    # 한국 종목 맵 (코스피 .KS / 코스닥 .KQ 구분)
-    ticker_map = {
-        "삼성전자": "005930.KS", "LS": "006260.KS", "LS ELECTRIC": "010120.KS", 
-        "HD현대일렉트릭": "267260.KS", "SK하이닉스": "000660.KS", "DL이앤씨": "375500.KS", 
-        "리노공업": "058470.KQ",  # <--- .KQ로 수정 (코스닥 종목)
-        "LG전자": "066570.KS", "NAVER": "035420.KS", 
-        "카카오": "035720.KS", "두산에너빌리티": "034020.KS", "현대차2우B": "005387.KS", 
-        "한국전력": "015760.KS", "TIGER반도체TOP10": "396500.KS", "HANARO Fn K-반도체": "395270.KS"
+# 3. 시세 엔진 (인식 에러 잦은 ETF 전용 매핑 강화)
+def get_live_prices(ticker_list, is_us=False):
+    if not ticker_list: return {}
+    # 한국 종목 정밀 매핑 사전
+    m = {
+        "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "LS": "006260.KS", 
+        "LS ELECTRIC": "010120.KS", "LSELECTRIC": "010120.KS", "HD현대일렉트릭": "267260.KS",
+        "리노공업": "058470.KQ", "두산에너빌리티": "034020.KS", "DL이앤씨": "375500.KS",
+        "LG전자": "066570.KS", "현대차2우B": "005387.KS", 
+        "TIGER반도체TOP10": "396500.KS", "TIGER반도체": "396500.KS",
+        "HANAROFnK반도체": "395270.KS", "HANAROFnK-반도체": "395270.KS", "HANARO반도체": "395270.KS"
     }
-    data_dict = {}
-    for t in tickers:
-        if t in ['예수금', 'Cash', 'TOTAL', '합계']: continue
+    
+    results = {}
+    for t in ticker_list:
+        symbol = str(t).strip()
+        if symbol.upper() == 'CASH': continue
+        
+        # 매핑 사전에 있는지 먼저 확인, 없으면 기본 티커 규칙 적용
+        clean_name = symbol.replace(" ", "").replace("-", "")
+        target = symbol if is_us else m.get(clean_name, f"{symbol}.KS")
+        
         try:
-            # 1. 미국 주식이면 티커 그대로 사용
-            if is_us:
-                symbol = t
-            # 2. 한국 주식이면 맵에서 먼저 찾고, 없으면 기본 .KS 적용
-            else:
-                symbol = ticker_map.get(t, f"{t}.KS")
-            
-            ticker_obj = yf.Ticker(symbol)
-            # 데이터를 가져오지 못할 경우를 대비해 5일치 데이터를 요청하여 안정성 확보
-            hist = ticker_obj.history(period="5d") 
-            
-            if len(hist) >= 2:
-                data_dict[t] = {'current': hist['Close'].iloc[-1], 'prev_close': hist['Close'].iloc[-2]}
-            elif len(hist) == 1:
-                data_dict[t] = {'current': hist['Close'].iloc[-1], 'prev_close': hist['Close'].iloc[-1]}
-        except: pass
-    return data_dict
+            ticker_obj = yf.Ticker(target)
+            # period를 5일로 늘려 데이터 누락 방지
+            hist = ticker_obj.history(period="5d")
+            if not hist.empty:
+                current_p = hist['Close'].dropna().iloc[-1]
+                prev_p = hist['Close'].dropna().iloc[-2] if len(hist) > 1 else current_p
+                results[symbol] = {"cur": current_p, "prev": prev_p}
+        except:
+            continue
+    return results
 
-# 4. 포트폴리오 가공 엔진
-def process_portfolio(df, stock_data, is_us=False, aggregate_cash=False):
+# 4. 연산 엔진 (CASH 및 컬럼명 정밀 타겟팅)
+def build_portfolio(df, prices, account_filter=None, is_us=False):
+    if df.empty: return pd.DataFrame()
     temp = df.copy()
-    if is_us:
-        temp = temp.rename(columns={'Symbol': '티커', 'Remarks': '종목명', 'Qty': '보유수량', 'Price Paid': '평균단가', 'Last Price': '현재가'})
-        id_col, cash_name = '티커', 'Cash'
+    if account_filter:
+        temp = temp[temp['계좌명'].astype(str).str.contains(account_filter, na=False)]
+    
+    # 컬럼 설정 (이미지 피드백 반영: Symbol, Qty, Price Paid 구조)
+    ticker_col = 'Symbol' if is_us else '종목명'
+    name_col = '종목명' if '종목명' in temp.columns else ticker_col
+    qty_col = 'Qty' if 'Qty' in temp.columns else ('보유수량' if '보유수량' in temp.columns else temp.columns[2])
+    # Price Paid 컬럼 탐색 로직 강화
+    price_cols = [c for c in temp.columns if 'Price' in c and 'Paid' in c]
+    avg_col = price_cols[0] if price_cols else ('평균단가' if '평균단가' in temp.columns else temp.columns[3])
+    
+    rows = []
+    for _, row in temp.iterrows():
+        symbol_raw = str(row.get(ticker_col, "")).strip()
+        name_raw = str(row.get(name_col, symbol_raw)).strip()
+        
+        qty = pd.to_numeric(row.get(qty_col, 0), errors='coerce') or 0
+        avg_p = pd.to_numeric(row.get(avg_col, 0), errors='coerce') or 0
+        sheet_now = pd.to_numeric(row.get('현재가', avg_p), errors='coerce') or avg_p
+        
+        # [현금 인식] Symbol이 CASH이거나 섹터가 CASH인 경우 최우선 처리
+        is_cash = (symbol_raw.upper() == 'CASH') or (str(row.get('섹터', '')).upper() == 'CASH')
+        
+        if is_cash:
+            rows.append({
+                "종목": "통합 예수금", "보유수량": int(qty), "평균단가": avg_p, "매수금액": qty * avg_p,
+                "현재가": avg_p, "평가금액": qty * avg_p, "평가손익": 0, "당일손익": 0, "섹터": "Cash"
+            })
+        else:
+            # 실시간 시세가 없으면 시트 현재가 사용 (이중 방어)
+            p_info = prices.get(symbol_raw if is_us else name_raw, {"cur": sheet_now, "prev": sheet_now})
+            cur_p, prev_p = p_info['cur'], p_info['prev']
+            rows.append({
+                "종목": name_raw, "보유수량": int(qty), "평균단가": avg_p, "매수금액": qty * avg_p,
+                "현재가": cur_p, "평가금액": qty * cur_p, 
+                "평가손익": (qty * cur_p) - (qty * avg_p),
+                "당일손익": (cur_p - prev_p) * qty, "섹터": str(row.get('섹터', '기타')).strip()
+            })
+    
+    res = pd.DataFrame(rows)
+    if not account_filter: # 통합 탭에서 중복 종목(LS 등) 합산
+        res = res.groupby(["종목", "섹터"]).agg({"보유수량": "sum", "매수금액": "sum", "현재가": "max", "평가금액": "sum", "당일손익": "sum", "평가손익": "sum"}).reset_index()
+        res["평균단가"] = (res["매수금액"] / res["보유수량"]).fillna(0)
+    
+    res['수익률(%)'] = (res['평가손익'] / res['매수금액'] * 100).fillna(0)
+    res["당일변화(%)"] = (res["당일손익"] / (res["평가금액"] - res["당일손익"]) * 100).fillna(0)
+    
+    # TOTAL 행 생성 (테이블 최하단 고정)
+    total = pd.DataFrame([{
+        "종목": "TOTAL", "보유수량": None, "평균단가": None, "매수금액": res["매수금액"].sum(), "현재가": None, 
+        "평가금액": res["평가금액"].sum(), "평가손익": res["평가손익"].sum(),
+        "수익률(%)": (res["평가손익"].sum() / res["매수금액"].sum() * 100) if res["매수금액"].sum() != 0 else 0,
+        "당일변화(%)": (res["당일손익"].sum() / (res["평가금액"].sum() - res["당일손익"].sum()) * 100) if (res["평가금액"].sum() - res["당일손익"].sum()) != 0 else 0,
+        "당일손익": res["당일손익"].sum(), "섹터": "Total"
+    }])
+    final_df = pd.concat([res, total], ignore_index=True)
+    cols = ["종목", "보유수량", "평균단가", "매수금액", "현재가", "평가금액", "평가손익", "수익률(%)", "당일변화(%)", "당일손익", "섹터"]
+    return final_df[cols]
+
+# 5. UI 렌더링 함수
+def display_view(df, title=None, unit="KRW"):
+    if df.empty: return
+    t_data = df[df["종목"] == "TOTAL"].iloc[0]
+    if title:
+        st.subheader(f"📍 {title}")
+        c1, c2, c3, c4 = st.columns(4)
+        sym = "원" if unit == "KRW" else "$"
+        c1.metric("총 평가금액", f"{t_data['평가금액']:,.0f} {sym}" if unit=="KRW" else f"${t_data['평가금액']:,.2f}", delta=f"{t_data['당일손익']:,.0f}" if unit=="KRW" else f"${t_data['당일손익']:,.2f}")
+        c2.metric("총 매수금액", f"{t_data['매수금액']:,.0f} {sym}" if unit=="KRW" else f"${t_data['매수금액']:,.2f}")
+        c3.metric("총 평가손익", f"{t_data['평가손익']:,.0f} {sym}" if unit=="KRW" else f"${t_data['평가손익']:,.2f}")
+        c4.metric("누적 수익률", f"{t_data['수익률(%)']:.1f}%")
+    
+    fmt = {'보유수량':'{:,.0f}', '평균단가':'{:,.1f}', '매수금액':'{:,.1f}', '현재가':'{:,.1f}', '평가금액':'{:,.1f}', '평가손익':'{:,.1f}', '수익률(%)':'{:.1f}%', '당일변화(%)':'{:.1f}%', '당일손익':'{:,.1f}'}
+    if unit == "KRW":
+        for k in ['평균단가', '매수금액', '현재가', '평가금액', '평가손익', '당일손익']: fmt[k] = '{:,.0f}'
     else:
-        temp = temp.rename(columns={'현재가': '기존현재가'})
-        id_col, cash_name = '종목명', '예수금'
+        for k in ['평균단가', '매수금액', '현재가', '평가금액', '평가손익', '당일손익']: fmt[k] = '${:,.2f}'
     
-    temp['보유수량'] = pd.to_numeric(temp['보유수량'], errors='coerce').fillna(0)
-    temp['평균단가'] = pd.to_numeric(temp['평균단가'], errors='coerce').fillna(0)
-    
-    def get_val(row, target):
-        name = row[id_col]
-        if name == cash_name: return row['평균단가']
-        fallback = row['현재가'] if is_us else row['기존현재가']
-        return stock_data.get(name, {}).get(target, fallback)
+    st.dataframe(df.style.format(fmt, na_rep="-").map(lambda v: f'color: {"#00FF00" if v > 0 else "#FF0000"}' if isinstance(v, (int, float)) and v != 0 else "", subset=['평가손익', '수익률(%)', '당일손익', '당일변화(%)']).apply(lambda x: ['background-color: #222222; font-weight: bold' if x.name == df.index[-1] else '' for i in x], axis=1), use_container_width=True)
+    chart_df = df[df["종목"] != "TOTAL"].groupby("섹터")["평가금액"].sum().reset_index()
+    st.plotly_chart(px.pie(chart_df, values='평가금액', names='섹터', hole=0.4, title=f"{title} 섹터 비중"), use_container_width=True)
 
-    temp['실시간현재가'] = temp.apply(lambda x: get_val(x, 'current'), axis=1)
-    temp['전일종가'] = temp.apply(lambda x: get_val(x, 'prev_close'), axis=1)
-    temp['매수금액'] = temp['보유수량'] * temp['평균단가']
-    temp['평가금액'] = temp['보유수량'] * temp['실시간현재가']
-    
-    if aggregate_cash and not is_us:
-        cash_mask = temp['종목명'] == '예수금'
-        if cash_mask.any():
-            stocks = temp[~cash_mask]
-            cash_total = temp.loc[cash_mask, '매수금액'].sum()
-            agg_cash = temp[cash_mask].iloc[0:1].copy()
-            if '계좌명' in agg_cash.columns: agg_cash['계좌명'] = '통합'
-            agg_cash['보유수량'], agg_cash['평균단가'], agg_cash['실시간현재가'] = 1, cash_total, cash_total
-            agg_cash['매수금액'], agg_cash['평가금액'] = cash_total, cash_total
-            temp = pd.concat([stocks, agg_cash], ignore_index=True)
+# 6. 메인 실행 및 자산 추이 저장
+log("실시간 데이터 분석 중...")
+df_kr_raw, df_us_raw = load_raw_sheet(KR_ID), load_raw_sheet(US_ID)
+prices_kr = get_live_prices(df_kr_raw['종목명'].unique().tolist())
+prices_us = get_live_prices(df_us_raw['Symbol'].unique().tolist(), is_us=True)
 
-    total_eval_sum = temp['평가금액'].sum()
-    temp['비중(%)'] = (temp['평가금액'] / total_eval_sum * 100) if total_eval_sum != 0 else 0
-    temp['평가손익'] = temp['평가금액'] - temp['매수금액']
-    temp['수익률(%)'] = (temp['평가손익'] / temp['매수금액'] * 100).fillna(0)
-    temp['전일대비'] = (temp['실시간현재가'] - temp['전일종가']) * temp['보유수량']
-    temp['전일변동(%)'] = ((temp['실시간현재가'] / temp['전일종가'] - 1) * 100).fillna(0)
-    
-    clean_df = temp.copy()
-    t_buy, t_eval = temp['매수금액'].sum(), temp['평가금액'].sum()
-    t_day = temp['전일대비'].sum()
-    t_profit, t_ratio = (t_eval - t_buy), ((t_eval/t_buy - 1)*100 if t_buy != 0 else 0)
-    t_day_ratio = (t_day / (t_eval - t_day) * 100) if (t_eval - t_day) != 0 else 0
+try: rate = yf.Ticker("USDKRW=X").history(period="1d")['Close'].iloc[-1]
+except: rate = 1385.0
 
-    summary_data = {'종목명': 'TOTAL', '보유수량': 0, '비중(%)': 100.0, '평균단가': 0, '매수금액': t_buy, '실시간현재가': 0, '평가금액': t_eval, '평가손익': t_profit, '수익률(%)': t_ratio, '전일대비': t_day, '전일변동(%)': t_day_ratio}
-    summary_df = pd.DataFrame([summary_data])
-    
-    base_cols = ['종목명', '보유수량', '비중(%)', '평균단가', '매수금액', '실시간현재가', '평가금액', '평가손익', '수익률(%)', '전일대비', '전일변동(%)', '섹터']
-    final_cols = (['티커'] + base_cols) if is_us else base_cols
-    if '계좌명' in temp.columns: final_cols = ['계좌명'] + final_cols
-    
-    return pd.concat([temp, summary_df], ignore_index=True)[final_cols], clean_df
+df_kr_total = build_portfolio(df_kr_raw, prices_kr)
+df_us_total = build_portfolio(df_us_raw, prices_us, is_us=True)
 
-def color_profit(val):
-    if isinstance(val, (int, float)):
-        if val > 0: return 'color: #00FF00'
-        if val < 0: return 'color: #FF0000'
-    return ''
+# 통합 자산 계산 및 히스토리 업데이트
+total_krw = df_kr_total[df_kr_total["종목"]=="TOTAL"]["평가금액"].sum() + (df_us_total[df_us_total["종목"]=="TOTAL"]["평가금액"].sum() * rate)
+d_str = datetime.now().strftime("%Y-%m-%d")
+if os.path.exists(HISTORY_FILE): h_df = pd.read_csv(HISTORY_FILE)
+else: h_df = pd.DataFrame(columns=["Date", "Total_KRW"])
+if d_str in h_df["Date"].values: h_df.loc[h_df["Date"] == d_str, "Total_KRW"] = total_krw
+else: h_df = pd.concat([h_df, pd.DataFrame([{"Date": d_str, "Total_KRW": total_krw}])], ignore_index=True)
+h_df.to_csv(HISTORY_FILE, index=False)
 
-# UI 구성
-st.title("🌎 태호님의 글로벌 투자 OS")
-tab_kr, tab_us = st.tabs(["🇰🇷 한국 포트폴리오", "🇺🇸 미국 포트폴리오"])
+# 최종 대시보드 렌더링
+st.markdown(f"### 🏦 통합 자산 현황: **{total_krw:,.0f} 원**")
+st.divider()
 
-kr_format = {'보유수량':'{:,.0f}', '비중(%)':'{:.1f}%', '평균단가':'{:,.0f}', '매수금액':'{:,.0f}', '실시간현재가':'{:,.0f}', '평가금액':'{:,.0f}', '평가손익':'{:,.0f}', '수익률(%)':'{:.2f}%', '전일대비':'{:,.0f}', '전일변동(%)':'{:.2f}%'}
-us_format = {'보유수량':'{:,.0f}', '비중(%)':'{:.1f}%', '평균단가':'${:,.2f}', '매수금액':'${:,.2f}', '실시간현재가':'${:,.2f}', '평가금액':'${:,.2f}', '평가손익':'${:,.2f}', '수익률(%)':'{:.2f}%', '전일대비':'${:,.2f}', '전일변동(%)':'{:.2f}%'}
-
-with tab_kr:
-    df_kr_raw = load_data(KR_SHEET_ID)
-    kr_data = get_stock_data(df_kr_raw['종목명'].unique())
-    sub_total, sub1, sub2, sub3 = st.tabs(["통합", "하나(전략)", "하나(일반)", "키움"])
-    def display_kr_tab(target_df, data, aggregate=False):
-        col1, col2 = st.columns([3, 1])
-        res, clean = process_portfolio(target_df, data, aggregate_cash=aggregate)
-        with col1: st.dataframe(res.style.format(kr_format).map(color_profit, subset=['평가손익', '수익률(%)', '전일대비', '전일변동(%)']), use_container_width=True)
-        with col2: st.plotly_chart(px.pie(clean, values='평가금액', names='섹터', hole=0.4), use_container_width=True)
-    with sub_total: display_kr_tab(df_kr_raw, kr_data, aggregate=True)
-    with sub1: display_kr_tab(df_kr_raw[df_kr_raw['계좌명'].str.contains("38011760")], kr_data)
-    with sub2: display_kr_tab(df_kr_raw[df_kr_raw['계좌명'].str.contains("38083150")], kr_data)
-    with sub3: display_kr_tab(df_kr_raw[df_kr_raw['계좌명'].str.contains("5851")], kr_data)
-
-with tab_us:
-    df_us_raw = load_data(US_SHEET_ID)
-    us_data = get_stock_data(df_us_raw['Symbol'].unique(), is_us=True)
-    col1, col2 = st.columns([3, 1])
-    res_us, clean_us = process_portfolio(df_us_raw, us_data, is_us=True)
-    with col1: st.dataframe(res_us.style.format(us_format).map(color_profit, subset=['평가손익', '수익률(%)', '전일대비', '전일변동(%)']), use_container_width=True)
-    with col2: st.plotly_chart(px.pie(clean_us, values='평가금액', names='섹터', hole=0.4), use_container_width=True)
+t1, t2, t3 = st.tabs(["🇰🇷 한국 주식", "🇺🇸 미국 주식", "📈 자산 추이"])
+with t1:
+    sub = st.tabs(["종목별 통합", "하나(전략)", "하나(일반)", "키움"])
+    with sub[0]: display_view(df_kr_total, title="한국 주식 통합")
+    with sub[1]: display_view(build_portfolio(df_kr_raw, prices_kr, "38011760"), title="하나(전략)")
+    with sub[2]: display_view(build_portfolio(df_kr_raw, prices_kr, "38083150"), title="하나(일반)")
+    with sub[3]: display_view(build_portfolio(df_kr_raw, prices_kr, "5851"), title="키움")
+with t2: display_view(df_us_total, title="미국 주식 통합", unit="USD")
+with t3:
+    st.plotly_chart(px.line(h_df, x="Date", y="Total_KRW", markers=True, title="자산 성장 곡선"), use_container_width=True)
+    st.table(h_df.sort_values("Date", ascending=False))
+log("업데이트 완료")
