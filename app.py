@@ -7,9 +7,9 @@ import requests
 import os
 from datetime import datetime
 
-# 1. 초기 설정 (버전 6.9 업데이트)
-st.set_page_config(page_title="Taeho's Investment OS v6.9", layout="wide")
-st.title("🌎 태호님의 글로벌 투자 OS v6.9")
+# 1. 초기 설정 (버전 7.0 업데이트: 디스플레이 유지 원칙 적용)
+st.set_page_config(page_title="Taeho's Investment OS v7.0", layout="wide")
+st.title("🌎 태호님의 글로벌 투자 OS v7.0")
 
 if st.sidebar.button("🔄 데이터 강제 새로고침"):
     st.cache_data.clear()
@@ -90,7 +90,7 @@ def get_live_prices(ticker_list, is_us=False):
                 except: pass
     return results
 
-# 4. 연산 엔진 (칼럼 고정)
+# 4. 연산 엔진 (칼럼 순서 영구 고정)
 def build_portfolio(df, prices, account_filter=None, is_us=False):
     if df.empty: return pd.DataFrame()
     temp = df.copy()
@@ -127,34 +127,35 @@ def build_portfolio(df, prices, account_filter=None, is_us=False):
     total_eval = res["평가금액"].sum()
     res["비중(%)"] = (res["평가금액"] / total_eval * 100).fillna(0)
     res['수익률(%)'] = (res['평가손익'] / res['매수금액'] * 100).fillna(0)
+    
     total = pd.DataFrame([{"섹터": "Total", "종목": "TOTAL", "매수금액": res["매수금액"].sum(), "평가금액": total_eval, "평가손익": res["평가손익"].sum(), "당일손익": res["당일손익"].sum(), "비중(%)": 100.0, "수익률(%)": (res["평가손익"].sum() / res["매수금액"].sum() * 100) if res["매수금액"].sum() != 0 else 0, "당일변화(%)": (res["당일손익"].sum() / (total_eval - res["당일손익"].sum()) * 100) if (total_eval - res["당일손익"].sum()) != 0 else 0}])
+    
     final_df = pd.concat([res, total], ignore_index=True)
     ordered_cols = ['섹터', '종목', '보유수량', '평균단가', '매수금액', '현재가', '평가금액', '평가손익', '수익률(%)', '당일변화(%)', '당일손익', '비중(%)']
     for col in ordered_cols:
         if col not in final_df.columns: final_df[col] = 0
     return final_df[ordered_cols]
 
-# 5. 기록 엔진 (로컬 CSV 파일 활용)
+# 5. 기록 엔진
 def track_asset_history(total_value):
     today = datetime.now().strftime("%Y-%m-%d")
     if os.path.exists(HISTORY_FILE):
         df_h = pd.read_csv(HISTORY_FILE)
     else:
         df_h = pd.DataFrame(columns=["date", "total_value"])
-    
-    # 오늘 날짜 데이터가 있으면 업데이트, 없으면 추가
     if today in df_h['date'].values:
         df_h.loc[df_h['date'] == today, 'total_value'] = total_value
     else:
         df_h = pd.concat([df_h, pd.DataFrame([{"date": today, "total_value": total_value}])], ignore_index=True)
-    
     df_h.to_csv(HISTORY_FILE, index=False)
     return df_h
 
-# 6. UI 및 차트 엔진
+# 6. UI 및 차트 엔진 (파이 차트 복구 완료)
 def display_view(df, title=None, unit="KRW"):
     if df.empty: return
     if title: st.subheader(f"📍 {title}")
+    
+    # 상단 요약 지표
     t_data = df[df["종목"].str.upper() == "TOTAL"].iloc[0]
     c1, c2, c3, c4 = st.columns(4)
     sym = "원" if unit == "KRW" else "$"
@@ -162,15 +163,28 @@ def display_view(df, title=None, unit="KRW"):
     c2.metric("총 매수금액", f"{t_data['매수금액']:,.0f} {sym}" if unit=="KRW" else f"${t_data['매수금액']:,.2f}")
     c3.metric("총 평가손익", f"{t_data['평가손익']:,.0f} {sym}" if unit=="KRW" else f"${t_data['평가손익']:,.2f}")
     c4.metric("수익률", f"{t_data['수익률(%)']:.1f}%")
+    
+    # 데이터 테이블
     fmt = {'보유수량':'{:,.0f}', '평균단가':'{:,.2f}', '매수금액':'{:,.2f}', '현재가':'{:,.2f}', '평가금액':'{:,.2f}', '평가손익':'{:,.2f}', '수익률(%)':'{:.1f}%', '당일변화(%)':'{:.1f}%', '당일손익':'{:,.2f}', '비중(%)':'{:.1f}%'}
     if unit == "KRW":
         for k in ['평균단가', '매수금액', '현재가', '평가금액', '평가손익', '당일손익']: fmt[k] = '{:,.0f}'
-    st.dataframe(df.style.format(fmt, na_rep="-").map(lambda v: f'color: {"#00FF00" if v > 0 else "#FF0000"}' if isinstance(v, (int, float)) and v != 0 else "", subset=['평가손익', '수익률(%)', '당일손익', '당일변화(%)']).apply(lambda x: ['background-color: #222222; font-weight: bold' if x.name == df.index[-1] else '' for i in x], axis=1), use_container_width=True)
+    
+    st.dataframe(df.style.format(fmt, na_rep="-").map(
+        lambda v: f'color: {"#00FF00" if v > 0 else "#FF0000"}' if isinstance(v, (int, float)) and v != 0 else "", 
+        subset=['평가손익', '수익률(%)', '당일손익', '당일변화(%)']
+    ).apply(lambda x: ['background-color: #222222; font-weight: bold' if x.name == df.index[-1] else '' for i in x], axis=1), use_container_width=True)
+    
+    # [복구] 섹터별 파이 차트
+    pie_data = df[~df["종목"].str.upper().isin(["TOTAL", "통합 예수금", "통합예수금"])].copy()
+    if not pie_data.empty:
+        fig = px.pie(pie_data, values='평가금액', names='섹터', hole=0.4, title=f"📊 {title} 섹터 비중")
+        st.plotly_chart(fig, use_container_width=True)
 
-# 7. 메인 실행
+# 7. 메인 실행 로직
 df_kr_raw, df_us_raw = load_raw_sheet(KR_ID), load_raw_sheet(US_ID)
 prices_kr = get_live_prices(df_kr_raw['종목명'].unique().tolist())
 prices_us = get_live_prices(df_us_raw['Symbol'].unique().tolist(), is_us=True)
+
 try: rate = yf.Ticker("USDKRW=X").history(period="1d")['Close'].iloc[-1]
 except: rate = 1385.0
 
@@ -178,12 +192,11 @@ df_kr_total = build_portfolio(df_kr_raw, prices_kr)
 df_us_total = build_portfolio(df_us_raw, prices_us, is_us=True)
 
 total_krw_val = df_kr_total[df_kr_total["종목"].str.upper() == "TOTAL"]["평가금액"].sum() + (df_us_total[df_us_total["종목"].str.upper() == "TOTAL"]["평가금액"].sum() * rate)
-history_df = track_asset_history(total_krw_val) # 자산 기록
+history_df = track_asset_history(total_krw_val)
 
 st.markdown(f"### 🏦 통합 자산 현황: **{total_krw_val:,.0f} 원**")
 st.divider()
 
-# 최상위 탭 구성
 main_tabs = st.tabs(["🇰🇷 한국 주식", "🇺🇸 미국 주식", "📈 총 자산 추이"])
 
 with main_tabs[0]:
@@ -199,23 +212,18 @@ with main_tabs[1]:
 with main_tabs[2]:
     st.subheader("📊 총 자산 역사적 추이 (KRW 합산)")
     if not history_df.empty:
-        # 백만원(M) 단위 변환 데이터 생성
         plot_df = history_df.copy()
         plot_df['total_m'] = plot_df['total_value'] / 1_000_000
-        
         fig = px.line(plot_df, x="date", y="total_m", markers=True, 
                       title="일일 자산 총액 변화 (단위: 백만원)",
                       labels={"total_m": "자산 총액 (M)", "date": "날짜"},
                       text="total_m")
-        
-        # 소수점 둘째 자리까지 + "M" 접미사 표기
         fig.update_traces(texttemplate='%{text:.2f}M', textposition='top center')
         fig.update_layout(yaxis_tickformat='.2f', hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
-        
         with st.expander("📝 과거 기록 데이터 확인"):
             st.table(history_df.sort_values(by="date", ascending=False))
     else:
-        st.info("기록된 자산 추이 데이터가 아직 없습니다. 내일부터 그래프가 형성됩니다.")
+        st.info("기록된 자산 추이 데이터가 아직 없습니다.")
 
-log("v6.9 업데이트 완료: '총 자산 추이' 탭 및 일일 자동 기록 엔진 추가")
+log("v7.0 업데이트 완료: 섹터 파이 차트 복구 및 디스플레이 유지 원칙 적용")
