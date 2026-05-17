@@ -7,9 +7,9 @@ import requests
 import os
 from datetime import datetime
 
-# 1. 초기 설정 (버전 7.0 업데이트: 디스플레이 유지 원칙 적용)
-st.set_page_config(page_title="Taeho's Investment OS v7.0", layout="wide")
-st.title("🌎 태호님의 글로벌 투자 OS v7.0")
+# 1. 초기 설정 (버전 7.1 업데이트: 한국 주식 당일 손익 부호 버그 완벽 수정)
+st.set_page_config(page_title="Taeho's Investment OS v7.1", layout="wide")
+st.title("🌎 태호님의 글로벌 투자 OS v7.1")
 
 if st.sidebar.button("🔄 데이터 강제 새로고침"):
     st.cache_data.clear()
@@ -60,7 +60,7 @@ def get_kr_ticker_code(name):
     except: pass
     return None
 
-# 3. 시세 엔진
+# 3. 시세 엔진 (수학적 연산을 통한 명확한 부호 구현)
 def get_live_prices(ticker_list, is_us=False):
     if not ticker_list: return {}
     results = {}
@@ -86,7 +86,14 @@ def get_live_prices(ticker_list, is_us=False):
                     url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}"
                     res = requests.get(url, timeout=3).json()
                     item = res['result']['areas'][0]['datas'][0]
-                    results[symbol] = {"cur": item['nv'], "prev": item['pcv'], "chg": item['cv'], "pct": item['cr']}
+                    
+                    # 절대값 변동액 대신 현재가(nv)와 전일종가(pcv)의 차이로 직접 부호를 계산하여 하락장 완벽 대응
+                    cur_p = item['nv']
+                    prev_p = item['pcv']
+                    calc_chg = cur_p - prev_p
+                    calc_pct = (calc_chg / prev_p * 100) if prev_p != 0 else 0
+                    
+                    results[symbol] = {"cur": cur_p, "prev": prev_p, "chg": calc_chg, "pct": calc_pct}
                 except: pass
     return results
 
@@ -150,12 +157,11 @@ def track_asset_history(total_value):
     df_h.to_csv(HISTORY_FILE, index=False)
     return df_h
 
-# 6. UI 및 차트 엔진 (파이 차트 복구 완료)
+# 6. UI 및 차트 엔진 (디스플레이 원칙 고수)
 def display_view(df, title=None, unit="KRW"):
     if df.empty: return
     if title: st.subheader(f"📍 {title}")
     
-    # 상단 요약 지표
     t_data = df[df["종목"].str.upper() == "TOTAL"].iloc[0]
     c1, c2, c3, c4 = st.columns(4)
     sym = "원" if unit == "KRW" else "$"
@@ -164,7 +170,6 @@ def display_view(df, title=None, unit="KRW"):
     c3.metric("총 평가손익", f"{t_data['평가손익']:,.0f} {sym}" if unit=="KRW" else f"${t_data['평가손익']:,.2f}")
     c4.metric("수익률", f"{t_data['수익률(%)']:.1f}%")
     
-    # 데이터 테이블
     fmt = {'보유수량':'{:,.0f}', '평균단가':'{:,.2f}', '매수금액':'{:,.2f}', '현재가':'{:,.2f}', '평가금액':'{:,.2f}', '평가손익':'{:,.2f}', '수익률(%)':'{:.1f}%', '당일변화(%)':'{:.1f}%', '당일손익':'{:,.2f}', '비중(%)':'{:.1f}%'}
     if unit == "KRW":
         for k in ['평균단가', '매수금액', '현재가', '평가금액', '평가손익', '당일손익']: fmt[k] = '{:,.0f}'
@@ -174,7 +179,7 @@ def display_view(df, title=None, unit="KRW"):
         subset=['평가손익', '수익률(%)', '당일손익', '당일변화(%)']
     ).apply(lambda x: ['background-color: #222222; font-weight: bold' if x.name == df.index[-1] else '' for i in x], axis=1), use_container_width=True)
     
-    # [복구] 섹터별 파이 차트
+    # 섹터별 파이 차트 유지
     pie_data = df[~df["종목"].str.upper().isin(["TOTAL", "통합 예수금", "통합예수금"])].copy()
     if not pie_data.empty:
         fig = px.pie(pie_data, values='평가금액', names='섹터', hole=0.4, title=f"📊 {title} 섹터 비중")
@@ -226,4 +231,4 @@ with main_tabs[2]:
     else:
         st.info("기록된 자산 추이 데이터가 아직 없습니다.")
 
-log("v7.0 업데이트 완료: 섹터 파이 차트 복구 및 디스플레이 유지 원칙 적용")
+log("v7.1 업데이트 완료: 한국 주식 하락장 부호 매칭 버그 수정 및 모든 디스플레이 원칙 적용")
