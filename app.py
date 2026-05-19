@@ -5,11 +5,11 @@ import plotly.express as px
 import time
 import requests
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# 1. 초기 설정 (버전 7.1 업데이트: 한국 주식 당일 손익 부호 버그 완벽 수정)
-st.set_page_config(page_title="Taeho's Investment OS v7.1", layout="wide")
-st.title("🌎 태호님의 글로벌 투자 OS v7.1")
+# 1. 초기 설정 (버전 7.4 업데이트: 발급받은 구글 웹 앱 URL 내장 완료)
+st.set_page_config(page_title="Taeho's Investment OS v7.4", layout="wide")
+st.title("🌎 태호님의 글로벌 투자 OS v7.4")
 
 if st.sidebar.button("🔄 데이터 강제 새로고침"):
     st.cache_data.clear()
@@ -21,6 +21,9 @@ def log(msg): log_area.info(f"🛰️ {msg}")
 KR_ID = "1tBxMnO3g8JpWA0zV2tIO96veEP2KeR6kfd9H1OnPXK4"
 US_ID = "1OfV4YUnc-gvQJ5ZdEZ6HU3ezK6lUp6WcHFcll-83Ibw"
 HISTORY_FILE = "assets_history.csv"
+
+# 구글 앱스 스크립트 웹 앱 URL 내장
+WEBAPP_URL = "https://script.google.com/macros/s/AKfycbyHQYiSH9YqO-NcMvRXkDZPP-qteVXAQwxIucaPuTa3BIuh96eySVtbzWIPman10N1fWg/exec" 
 
 def clean_numeric(val):
     if pd.isna(val): return 0
@@ -87,7 +90,6 @@ def get_live_prices(ticker_list, is_us=False):
                     res = requests.get(url, timeout=3).json()
                     item = res['result']['areas'][0]['datas'][0]
                     
-                    # 절대값 변동액 대신 현재가(nv)와 전일종가(pcv)의 차이로 직접 부호를 계산하여 하락장 완벽 대응
                     cur_p = item['nv']
                     prev_p = item['pcv']
                     calc_chg = cur_p - prev_p
@@ -97,7 +99,7 @@ def get_live_prices(ticker_list, is_us=False):
                 except: pass
     return results
 
-# 4. 연산 엔진 (칼럼 순서 영구 고정)
+# 4. 연산 엔진 (12개 칼럼 배정 순서 절대 고정 원칙 준수)
 def build_portfolio(df, prices, account_filter=None, is_us=False):
     if df.empty: return pd.DataFrame()
     temp = df.copy()
@@ -143,21 +145,48 @@ def build_portfolio(df, prices, account_filter=None, is_us=False):
         if col not in final_df.columns: final_df[col] = 0
     return final_df[ordered_cols]
 
-# 5. 기록 엔진
-def track_asset_history(total_value):
-    today = datetime.now().strftime("%Y-%m-%d")
-    if os.path.exists(HISTORY_FILE):
-        df_h = pd.read_csv(HISTORY_FILE)
-    else:
-        df_h = pd.DataFrame(columns=["date", "total_value"])
-    if today in df_h['date'].values:
-        df_h.loc[df_h['date'] == today, 'total_value'] = total_value
-    else:
-        df_h = pd.concat([df_h, pd.DataFrame([{"date": today, "total_value": total_value}])], ignore_index=True)
-    df_h.to_csv(HISTORY_FILE, index=False)
+# 5. 하이브리드 기록 엔진 (구글 시트 우선 연동 및 로컬 백업)
+def track_asset_history_hybrid(total_value):
+    kst_now = datetime.utcnow() + timedelta(hours=9)
+    today = kst_now.strftime("%Y-%m-%d")
+    
+    # [1] 구글 시트에 데이터 쓰기 시도
+    if WEBAPP_URL:
+        try:
+            requests.post(WEBAPP_URL, json={"date": today, "total_value": total_value}, timeout=5)
+        except Exception as e:
+            pass
+            
+    # [2] 구글 시트에서 전체 역사적 추이 읽어오기 시도
+    google_success = False
+    df_h = pd.DataFrame()
+    if WEBAPP_URL:
+        try:
+            read_url = f"https://docs.google.com/spreadsheets/d/{KR_ID}/gviz/tq?tqx=out:csv&sheet=%EC%9E%90%EC%82%B0%EC%B3%94%EC%9D%B4"
+            df_h = pd.read_csv(read_url)
+            if not df_h.empty and "date" in df_h.columns:
+                df_h.to_csv(HISTORY_FILE, index=False) # 로컬 백업 동기화
+                google_success = True
+        except:
+            pass
+            
+    # [3] 구글 시트 연동 실패 시 기존 로컬 CSV 파일 백업 작동
+    if not google_success:
+        if os.path.exists(HISTORY_FILE):
+            try: df_h = pd.read_csv(HISTORY_FILE)
+            except: df_h = pd.DataFrame(columns=["date", "total_value"])
+        else:
+            df_h = pd.DataFrame(columns=["date", "total_value"])
+            
+        if today in df_h['date'].values:
+            df_h.loc[df_h['date'] == today, 'total_value'] = total_value
+        else:
+            df_h = pd.concat([df_h, pd.DataFrame([{"date": today, "total_value": total_value}])], ignore_index=True)
+        df_h.to_csv(HISTORY_FILE, index=False)
+        
     return df_h
 
-# 6. UI 및 차트 엔진 (디스플레이 원칙 고수)
+# 6. UI 및 차트 디스플레이 엔진 (디스플레이 원칙 절대 고수)
 def display_view(df, title=None, unit="KRW"):
     if df.empty: return
     if title: st.subheader(f"📍 {title}")
@@ -179,7 +208,7 @@ def display_view(df, title=None, unit="KRW"):
         subset=['평가손익', '수익률(%)', '당일손익', '당일변화(%)']
     ).apply(lambda x: ['background-color: #222222; font-weight: bold' if x.name == df.index[-1] else '' for i in x], axis=1), use_container_width=True)
     
-    # 섹터별 파이 차트 유지
+    # 섹터별 파이 차트 상시 유지
     pie_data = df[~df["종목"].str.upper().isin(["TOTAL", "통합 예수금", "통합예수금"])].copy()
     if not pie_data.empty:
         fig = px.pie(pie_data, values='평가금액', names='섹터', hole=0.4, title=f"📊 {title} 섹터 비중")
@@ -197,7 +226,7 @@ df_kr_total = build_portfolio(df_kr_raw, prices_kr)
 df_us_total = build_portfolio(df_us_raw, prices_us, is_us=True)
 
 total_krw_val = df_kr_total[df_kr_total["종목"].str.upper() == "TOTAL"]["평가금액"].sum() + (df_us_total[df_us_total["종목"].str.upper() == "TOTAL"]["평가금액"].sum() * rate)
-history_df = track_asset_history(total_krw_val)
+history_df = track_asset_history_hybrid(total_krw_val) 
 
 st.markdown(f"### 🏦 통합 자산 현황: **{total_krw_val:,.0f} 원**")
 st.divider()
@@ -215,10 +244,10 @@ with main_tabs[1]:
     display_view(df_us_total, title="미국 주식 통합", unit="USD")
 
 with main_tabs[2]:
-    st.subheader("📊 총 자산 역사적 추이 (KRW 합산)")
+    st.subheader("📊 총 자산 역사적 추이 (구글 시트 영구 연동)")
     if not history_df.empty:
         plot_df = history_df.copy()
-        plot_df['total_m'] = plot_df['total_value'] / 1_000_000
+        plot_df['total_m'] = pd.to_numeric(plot_df['total_value'], errors='coerce').fillna(0) / 1_000_000
         fig = px.line(plot_df, x="date", y="total_m", markers=True, 
                       title="일일 자산 총액 변화 (단위: 백만원)",
                       labels={"total_m": "자산 총액 (M)", "date": "날짜"},
@@ -226,9 +255,9 @@ with main_tabs[2]:
         fig.update_traces(texttemplate='%{text:.2f}M', textposition='top center')
         fig.update_layout(yaxis_tickformat='.2f', hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
-        with st.expander("📝 과거 기록 데이터 확인"):
+        with st.expander("📝 구글 시트 동기화 데이터 확인"):
             st.table(history_df.sort_values(by="date", ascending=False))
     else:
-        st.info("기록된 자산 추이 데이터가 아직 없습니다.")
+        st.info("기록된 자산 추이 데이터가 아직 없습니다. 최초 데이터 전송 후 내일부터 추이 선이 나타납니다.")
 
-log("v7.1 업데이트 완료: 한국 주식 하락장 부호 매칭 버그 수정 및 모든 디스플레이 원칙 적용")
+log("v7.4 업데이트 완료: 구글 스프레드시트 영구 기록용 웹 앱 URL 통합 가동")
