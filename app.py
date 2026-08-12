@@ -6,9 +6,9 @@ import plotly.express as px
 import yfinance as yf
 from datetime import datetime, timedelta
 
-# 1. 초기 설정
-st.set_page_config(page_title="Taeho's Investment OS v8.26", layout="wide")
-st.title("🌎 태호님의 글로벌 투자 OS v8.26 (전 기능 복구)")
+# 1. 초기 설정 (v9.0의 모든 디테일 보존)
+st.set_page_config(page_title="Taeho's Investment OS v9.4", layout="wide")
+st.title("🌎 태호님의 글로벌 투자 OS v9.4")
 
 if st.sidebar.button("🔄 데이터 강제 새로고침"):
     st.cache_data.clear()
@@ -20,7 +20,7 @@ HISTORY_FILE = "assets_history.csv"
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbyHQYiSH9YqO-NcMvRXkDZPP-qteVXAQwxIucaPuTa3BIuh96eySVtbzWIPman10N1fWg/exec" 
 
 def clean_numeric(val):
-    if pd.isna(val): return 0
+    if pd.isna(val) or val == "": return 0
     return float(str(val).replace(',', '').replace('$', '').replace('₩', '').replace('원', '').strip())
 
 @st.cache_data(ttl=60)
@@ -36,9 +36,12 @@ def load_raw_sheet(sid):
 def get_live_prices(ticker_list, is_us=False):
     results = {}
     if not is_us:
-        m = {"삼성전자": "005930", "SK하이닉스": "000660", "LS": "006260", "LSELECTRIC": "010120", "HD현대일렉트릭": "267260", "한국전력": "015760", "리노공업": "058470", "두산에너빌리티": "034020", "DL이앤씨": "375500", "LG전자": "066570", "현대차2우B": "005387", "HANARO Fn K-반도체": "395270", "TIGER반도체TOP10": "396500", "클래시스": "214150", "이루다": "164060"}
+        # HANARO Fn K-반도체 티커(395270) 강제 매핑 및 유연한 매칭
+        m = {"삼성전자": "005930", "SK하이닉스": "000660", "LS": "006260", "LS ELECTRIC": "010120", "HD현대일렉트릭": "267260", "한국전력": "015760", "리노공업": "058470", "두산에너빌리티": "034020", "DL이앤씨": "375500", "LG전자": "066570", "현대차2우B": "005387", "HANARO Fn K-반도체": "395270", "HANAROFNK반도체": "395270", "TIGER반도체TOP10": "396500", "클래시스": "214150", "이루다": "164060"}
         for t in ticker_list:
-            code = m.get(t.strip())
+            key = t.strip()
+            code = m.get(key)
+            if not code and "HANARO" in key: code = "395270"
             if code:
                 try:
                     res = requests.get(f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}", timeout=3).json()
@@ -67,10 +70,13 @@ def build_portfolio(df, prices, account_filter=None, is_us=False):
     for _, row in temp.iterrows():
         id_val = str(row.get('Symbol' if is_us else '종목명', "")).strip().upper()
         name_val = str(row.get('종목명', id_val))
-        qty, avg_p = clean_numeric(row.get('Qty' if is_us else '보유수량', 0)), clean_numeric(row.get('Price Paid' if is_us else '평균단가', 0))
+        qty = clean_numeric(row.get('Qty' if is_us else '보유수량', 0))
+        avg_p = clean_numeric(row.get('Price Paid' if is_us else '평균단가', 0))
+        
         if id_val in ['CASH', '예수금'] or '예수금' in name_val: cash_eval += (qty * avg_p)
         else:
-            p_info = prices.get(id_val if is_us else name_val, {"cur": avg_p, "chg": 0, "pct": 0})
+            key = id_val if is_us else name_val
+            p_info = prices.get(key, {"cur": avg_p, "chg": 0, "pct": 0})
             cur_p = p_info.get('cur') if (p_info.get('cur') and p_info.get('cur') > 0) else avg_p
             rows.append({"섹터": row.get('섹터', '미분류'), "종목": name_val, "보유수량": qty, "평균단가": avg_p, "매수금액": qty * avg_p, "현재가": cur_p, "평가금액": qty * cur_p, "평가손익": (qty * cur_p) - (qty * avg_p), "당일손익": p_info.get('chg', 0) * qty, "당일변화(%)": p_info.get('pct', 0), "수익률(%)": (((cur_p / avg_p) - 1) * 100) if avg_p != 0 else 0})
     
@@ -114,11 +120,11 @@ def display_view(df, title=None, unit="KRW"):
     pie_data = df[~df["종목"].isin(["TOTAL", "통합 예수금"])].copy()
     if not pie_data.empty: st.plotly_chart(px.pie(pie_data, values='평가금액', names='섹터', hole=0.4, title=f"📊 {title} 섹터 비중"), use_container_width=True)
 
-# 메인 실행
 df_kr_raw, df_us_raw = load_raw_sheet(KR_ID), load_raw_sheet(US_ID)
 prices_kr = get_live_prices(df_kr_raw['종목명'].unique().tolist())
 prices_us = get_live_prices(df_us_raw['Symbol'].unique().tolist(), is_us=True)
-df_kr_total, df_us_total = build_portfolio(df_kr_raw, prices_kr), build_portfolio(df_us_raw, prices_us, is_us=True)
+df_kr_total = build_portfolio(df_kr_raw, prices_kr)
+df_us_total = build_portfolio(df_us_raw, prices_us, is_us=True)
 total_val = df_kr_total[df_kr_total["종목"]=="TOTAL"]["평가금액"].iloc[0] + (df_us_total[df_us_total["종목"]=="TOTAL"]["평가금액"].iloc[0] * 1385.0)
 history_df = track_asset_history_hybrid(total_val)
 
