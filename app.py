@@ -6,9 +6,9 @@ import plotly.express as px
 import yfinance as yf
 from datetime import datetime, timedelta
 
-# 1. 초기 설정 (v9.0의 모든 디테일 보존)
-st.set_page_config(page_title="Taeho's Investment OS v9.4", layout="wide")
-st.title("🌎 태호님의 글로벌 투자 OS v9.4")
+# 1. 초기 설정
+st.set_page_config(page_title="Taeho's Investment OS v9.5", layout="wide")
+st.title("🌎 태호님의 글로벌 투자 OS v9.5")
 
 if st.sidebar.button("🔄 데이터 강제 새로고침"):
     st.cache_data.clear()
@@ -36,7 +36,6 @@ def load_raw_sheet(sid):
 def get_live_prices(ticker_list, is_us=False):
     results = {}
     if not is_us:
-        # HANARO Fn K-반도체 티커(395270) 강제 매핑 및 유연한 매칭
         m = {"삼성전자": "005930", "SK하이닉스": "000660", "LS": "006260", "LS ELECTRIC": "010120", "HD현대일렉트릭": "267260", "한국전력": "015760", "리노공업": "058470", "두산에너빌리티": "034020", "DL이앤씨": "375500", "LG전자": "066570", "현대차2우B": "005387", "HANARO Fn K-반도체": "395270", "HANAROFNK반도체": "395270", "TIGER반도체TOP10": "396500", "클래시스": "214150", "이루다": "164060"}
         for t in ticker_list:
             key = t.strip()
@@ -82,9 +81,19 @@ def build_portfolio(df, prices, account_filter=None, is_us=False):
     
     res = pd.DataFrame(rows)
     if not res.empty:
-        res = res.groupby(["종목", "섹터"]).agg({"보유수량":"sum", "매수금액":"sum", "평가금액":"sum", "평가손익":"sum", "당일손익":"sum", "당일변화(%)":"mean", "수익률(%)":"mean"}).reset_index()
+        # [v9.5 버그 수정] 수익률을 단순 평균(mean) 내지 않고, 합산된 매수금액과 평가금액 기준으로 정확히 산출
+        res = res.groupby(["종목", "섹터"]).agg({
+            "보유수량": "sum", 
+            "매수금액": "sum", 
+            "평가금액": "sum", 
+            "평가손익": "sum", 
+            "당일손익": "sum", 
+            "당일변화(%)": "mean"
+        }).reset_index()
+        
         res["평균단가"] = res["매수금액"] / res["보유수량"]
         res["현재가"] = res["평가금액"] / res["보유수량"]
+        res["수익률(%)"] = ((res["평가금액"] / res["매수금액"]) - 1) * 100
     
     cash_df = pd.DataFrame([{"섹터": "Cash", "종목": "통합 예수금", "평가금액": cash_eval, "보유수량": 0, "매수금액": 0, "평가손익": 0, "당일손익": 0, "당일변화(%)": 0, "수익률(%)": 0}])
     res = pd.concat([res.sort_values(by="평가금액", ascending=False), cash_df], ignore_index=True)
